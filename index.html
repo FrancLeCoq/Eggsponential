@@ -154,6 +154,38 @@ body.playing #screenGame.card{
 .chain span.got{filter:none; opacity:1; text-shadow:0 0 10px rgba(255,215,0,.5)}
 .chain span.arw{font-size:min(2.4vw,10px); color:var(--muted); filter:none; opacity:.45}
 
+/* CLASSEMENT (même construction que Chicken Reflex / Chicken Blast) */
+#btnBoard{font-size:17px; padding:14px 18px; line-height:1.2; text-align:center}
+.sec-title{font-family:'Bangers',cursive; font-size:24px; letter-spacing:2px; color:var(--purple); text-align:center; margin-bottom:6px}
+.sec-sub{font-size:11px; color:var(--muted); text-align:center; margin-bottom:16px; line-height:1.5}
+.summary-box{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px}
+.sum-card{background:rgba(255,255,255,0.05); border:1px solid rgba(168,85,247,0.28);
+  border-radius:13px; padding:10px 8px; text-align:center; display:flex; flex-direction:column; gap:1px}
+.sum-card.top{border-color:rgba(255,215,0,0.55); background:linear-gradient(145deg,rgba(255,215,0,0.14),rgba(217,119,6,0.10))}
+.sum-card.me{border-color:rgba(34,197,94,0.5); background:linear-gradient(145deg,rgba(22,163,74,0.20),rgba(21,128,61,0.14))}
+.sum-card.me.none{border-color:rgba(168,85,247,0.28); background:rgba(255,255,255,0.04)}
+.sum-card .cap{font-size:9px; color:var(--muted); letter-spacing:.5px}
+.sum-card b{font-family:'Bangers',cursive; font-size:20px; letter-spacing:1px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sum-card.top b{color:var(--gold)}
+.sum-card.me b{color:var(--green-l)}
+.sum-card .pt{font-size:11px}
+.sum-card .sp{font-size:9px; color:var(--muted)}
+.sum-players{grid-column:1/-1; text-align:center; font-size:10px; color:var(--muted)}
+.sum-empty{grid-column:1/-1; text-align:center; padding:6px; color:var(--muted); font-size:12px}
+.scores-box{margin-top:6px; background:rgba(255,255,255,0.04); border:1px solid rgba(168,85,247,0.25); border-radius:14px; padding:14px}
+.scores-box .sh{font-family:'Bangers',cursive; letter-spacing:1px; color:var(--gold); font-size:16px; margin-bottom:10px; text-align:center}
+.score-row{display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:10px; margin-bottom:6px; font-size:13px; background:rgba(255,255,255,0.03)}
+.score-row.me{background:rgba(168,85,247,0.22); border:1px solid rgba(192,132,252,0.5)}
+.score-row .rank{font-family:'Bangers',cursive; font-size:18px; width:30px; flex:0 0 auto}
+.score-row.r1 .rank{color:#FFD700}.score-row.r2 .rank{color:#d1d5db}.score-row.r3 .rank{color:#cd7f32}
+.score-row .who{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.score-row .val{font-family:'Bangers',cursive; letter-spacing:1px; color:var(--green-l); font-size:16px}
+.score-row .meta{font-size:10px; color:var(--muted); width:64px; text-align:right; flex:0 0 auto}
+.score-gap{text-align:center; color:var(--muted); font-size:18px; letter-spacing:4px; padding:2px 0 4px; opacity:.7}
+.no-scores{text-align:center; color:var(--muted); font-size:12px; padding:8px; line-height:1.6}
+.modal .invite{font-size:11px; color:var(--muted); margin:-6px 0 14px; line-height:1.5}
+
 /* OVERLAY / MODAL / TOAST */
 .overlay{position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
   padding:24px; background:rgba(5,2,15,0.82); backdrop-filter:blur(6px)}
@@ -204,6 +236,10 @@ body.playing #screenGame.card{
     <button class="menu-btn btn-comp-orange" id="btnGolden" onclick="startGame(true)">
       <span class="ico">🥚</span><span id="lblGolden">MODE DORÉ</span><span class="lock" id="goldLock"></span>
     </button>
+    <button class="menu-btn btn-purple" id="btnBoard" onclick="openBoard()">
+      <span class="ico">🏆</span>
+      <span class="wallet-text"><span id="lblBoard">CLASSEMENT MONDIAL DU MODE DORÉ</span><span class="wallet-sub" id="boardSum"></span></span>
+    </button>
     <button class="menu-btn btn-wallet" id="btnWallet" onclick="goConnectWallet()">
       <span class="ico">👛</span>
       <span class="wallet-text"><span id="lblWallet">CONNECT WALLET</span><span class="wallet-sub" id="walletSub"></span></span>
@@ -220,10 +256,23 @@ body.playing #screenGame.card{
     </div>
   </div>
 
+  <!-- CLASSEMENT -->
+  <div class="card hidden" id="screenBoard">
+    <button class="back-btn" id="backBoard" style="margin-bottom:14px" onclick="show('screenMenu')">Retour</button>
+    <div class="sec-title">🏆 <span id="boardTitle">CLASSEMENT MONDIAL</span></div>
+    <div class="sec-sub" id="boardSub">Mode Doré · le meilleur score de chaque joueur</div>
+    <div class="summary-box" id="boardSummary"></div>
+    <div class="scores-box">
+      <div class="sh" id="lblTop">🏅 TOP 10</div>
+      <div id="board"></div>
+      <div class="no-scores" id="boardState"></div>
+    </div>
+  </div>
+
   <!-- GAME -->
   <div class="card hidden" id="screenGame">
     <div class="game-top">
-      <button class="back-btn" id="backGame" onclick="show('screenMenu')">Menu</button>
+      <button class="back-btn" id="backGame" onclick="quitGame()">Menu</button>
       <span class="lvl-badge" id="gameMode"></span>
     </div>
     <div class="hud" id="hud"></div>
@@ -277,7 +326,7 @@ const TIERS = [
 const I18N = {
   fr:{
     tagline:'EGGSPONENTIAL', play:'JOUER', golden:'MODE DORÉ', wallet:'CONNECT WALLET',
-    menu:'Menu', undo:'Annuler', replay:'Rejouer', score:'SCORE', best:'RECORD', spec:'ESPÈCE',
+    menu:'Menu', retour:'Retour', undo:'Annuler', replay:'Rejouer', score:'SCORE', best:'RECORD', spec:'ESPÈCE',
     modeClassic:'🥚 MODE CLASSIQUE', modeGolden:'✨ MODE DORÉ · ×2',
     statusFranc:'<b>Mode Classique</b> : gratuit pour tout le monde<br><b>Mode Doré</b> (score ×2 + 3 retours) : réservé aux détenteurs de <b>$FRANC</b>',
     statusNo:'<b>Mode Classique</b> : gratuit pour tout le monde<br><b>Mode Doré</b> (score ×2 + 3 retours) : réservé aux détenteurs de <b>$FRANC</b>',
@@ -289,11 +338,20 @@ const I18N = {
     win:'FRANCIS DORÉ !', winText:'Tu as fait éclore <b>Francis doré</b> !<br>Continue pour battre ton record.',
     keepGoing:'Continuer', toMenu:'Menu',
     newRecord:'🎉 Nouveau record !', newSpecies:'🥚 Nouvelle espèce :',
+    board:'CLASSEMENT MONDIAL DU MODE DORÉ', boardTitle:'CLASSEMENT MONDIAL',
+    boardSub:'Mode Doré · le meilleur score de chaque joueur', top:'🏅 TOP 10',
+    seeBoard:'🏆 Classement', champion:'Champion', yourBest:'Ton meilleur',
+    notPlayed:'Pas encore classé', playersTotal:'joueur(s) classé(s)',
+    bestScore:'Meilleur score', loading:'Chargement…',
+    boardFail:'Classement indisponible pour le moment.',
+    noScores:'Aucun score pour le moment.\nJoue au Mode Doré pour ouvrir le classement !',
+    rankLine:'Rang mondial : #%N sur %T', sendFail:'Score non envoyé.',
+    tgOnly:'Le classement mondial est réservé à Telegram.',
     names:['Œuf','Œuf doré','Couvée','Éclosion','Poussin','Poussin doré','Poule','Poule dorée','Coq','Coq royal','Francis doré']
   },
   en:{
     tagline:'EGGSPONENTIAL', play:'PLAY', golden:'GOLDEN MODE', wallet:'CONNECT WALLET',
-    menu:'Menu', undo:'Undo', replay:'Replay', score:'SCORE', best:'BEST', spec:'SPECIES',
+    menu:'Menu', retour:'Back', undo:'Undo', replay:'Replay', score:'SCORE', best:'BEST', spec:'SPECIES',
     modeClassic:'🥚 CLASSIC MODE', modeGolden:'✨ GOLDEN MODE · x2',
     statusFranc:'<b>Classic mode</b>: free for everyone<br><b>Golden mode</b> (x2 score + 3 undos): only for <b>$FRANC</b> holders',
     statusNo:'<b>Classic mode</b>: free for everyone<br><b>Golden mode</b> (x2 score + 3 undos): only for <b>$FRANC</b> holders',
@@ -305,6 +363,15 @@ const I18N = {
     win:'GOLDEN FRANCIS!', winText:'You hatched <b>Golden Francis</b>!<br>Keep going to beat your record.',
     keepGoing:'Keep going', toMenu:'Menu',
     newRecord:'🎉 New record!', newSpecies:'🥚 New species:',
+    board:'GOLDEN MODE WORLD LEADERBOARD', boardTitle:'WORLD LEADERBOARD',
+    boardSub:'Golden mode · each player\'s best score', top:'🏅 TOP 10',
+    seeBoard:'🏆 Leaderboard', champion:'Champion', yourBest:'Your best',
+    notPlayed:'Not ranked yet', playersTotal:'ranked player(s)',
+    bestScore:'Best score', loading:'Loading…',
+    boardFail:'Leaderboard unavailable right now.',
+    noScores:'No score yet.\nPlay Golden mode to open the leaderboard!',
+    rankLine:'World rank: #%N of %T', sendFail:'Score not sent.',
+    tgOnly:'The world leaderboard is Telegram only.',
     names:['Egg','Golden egg','Clutch','Hatching','Chick','Golden chick','Hen','Golden hen','Rooster','Royal rooster','Golden Francis']
   }
 };
@@ -377,8 +444,137 @@ function renderStatusBar(){
 }
 function goConnectWallet(){ window.location.href=WALLET_PAGE; }
 
+/* ============================================================
+   CLASSEMENT MONDIAL DU MODE DORÉ
+   Même construction que le classement de Chicken Reflex : une seule
+   Edge Function, une seule ligne par joueur, et le minimum d'appels —
+   AUCUN au démarrage, une écriture uniquement sur record, une lecture
+   uniquement quand le joueur ouvre le classement.
+   ============================================================ */
+const SCORES_EP = BACKEND + '/eggsponential-scores';
+/* Le client n'envoie jamais son identité : le serveur la dérive des initData
+   Telegram dont il vérifie la signature. Écrire exige donc d'être dans
+   Telegram ; lire reste ouvert à tout le monde. */
+const canSubmit = () => !!tg?.initData;
+const fmt = n => Number(n||0).toLocaleString(lang==='fr'?'fr-FR':'en-GB');
+const esc = s => String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+async function callScores(action, extra){
+  const body={action, ...extra};
+  if(tg?.initData) body.initData=tg.initData;
+  const res=await fetch(SCORES_EP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await res.json().catch(()=>null);
+  if(!res.ok || !d?.ok) throw new Error(d?.error || res.status);
+  return d.result;
+}
+const submitScore = (s) => callScores('submit',{mode:'golden', score:s.score, best_tile:s.tile, moves:s.moves});
+/* Le seul appel de lecture du jeu : TOP 10 + la ligne du joueur, d'un coup. */
+const fetchBoard  = () => callScores('board',{mode:'golden', limit:10});
+
+/* ---------- Record local ----------
+   On n'écrit dans Supabase que si la partie bat le record du joueur. Le record
+   connu est gardé en localStorage, donc une partie ordinaire ne déclenche
+   AUCUN appel réseau. Le serveur revérifie de son côté (upsert conditionnel). */
+function localBest(){ try{ return JSON.parse(localStorage.getItem('flce_best_golden'))||null; }catch(e){ return null; } }
+function setLocalBest(score,tile,rank){ localStorage.setItem('flce_best_golden',JSON.stringify({score,tile,rank})); }
+/* Même règle que le classement : score supérieur, ou score égal plus haute tuile. */
+function isRecord(score,tile){
+  const b=localBest();
+  if(!b) return true;
+  if(score>b.score) return true;
+  return score===b.score && tile>(b.tile||0);
+}
+
+/* ---------- Résumé sous le bouton (champion + ma place) ----------
+   Purement local : rien n'est chargé au démarrage. Le cache est rafraîchi
+   quand le joueur ouvre le classement, ou quand il bat son record. */
+let SUMMARY=(()=>{ try{ return JSON.parse(localStorage.getItem('flce_sum'))||null; }catch(e){ return null; } })();
+function saveSummary(){ localStorage.setItem('flce_sum',JSON.stringify(SUMMARY)); }
+function renderBoardBtn(){
+  const el=document.getElementById('boardSum');
+  // Jamais consulté : on n'affiche rien plutôt que d'inventer un classement vide.
+  if(!SUMMARY){ el.textContent=''; return; }
+  if(!SUMMARY.top){ el.textContent=t('noScores').split('\n')[0]; return; }
+  const me=SUMMARY.me ? ` · ${t('yourBest')} #${SUMMARY.me.rank}` : '';
+  el.innerHTML=`🥇 ${esc(SUMMARY.top.name)} · ${fmt(SUMMARY.top.score)}${me}`;
+}
+
+function openBoard(){ show('screenBoard'); loadBoard(); }
+async function loadBoard(){
+  const list=document.getElementById('board'), st=document.getElementById('boardState'),
+        sum=document.getElementById('boardSummary');
+  list.innerHTML=''; sum.innerHTML=''; st.textContent=t('loading');
+  try{
+    // Un seul appel : le TOP 10 et la ligne du joueur arrivent ensemble.
+    const b=await fetchBoard();
+    const rows=b.top||[];
+    sum.innerHTML=boardSummaryHtml(b);
+    let html=rows.map(r=>scoreRow(r,r.is_me)).join('');
+    // Joueur hors du TOP : petits points, puis sa ligne juste en dessous.
+    if(b.me && !rows.some(r=>r.is_me)) html+=`<div class="score-gap">⋯</div>`+scoreRow(b.me,true);
+    list.innerHTML=html;
+    // Consultation du classement = seul moment où le cache se rafraîchit.
+    SUMMARY={players:b.players, top:rows[0]||null, me:b.me||null};
+    saveSummary(); renderBoardBtn();
+    if(b.me) setLocalBest(b.me.score, b.me.best_tile, b.me.rank);
+    st.textContent = rows.length ? '' : t('noScores').replace('\n',' ');
+  }catch(e){
+    sum.innerHTML=''; st.textContent=t('boardFail');
+  }
+}
+function scoreRow(r,isMe){
+  const medal = r.rank===1?'🥇' : r.rank===2?'🥈' : r.rank===3?'🥉' : '#'+r.rank;
+  return `<div class="score-row r${r.rank} ${isMe?'me':''}">
+      <span class="rank">${medal}</span>
+      <span class="who">${esc(r.name)}</span>
+      <span class="val">${fmt(r.score)}</span>
+      <span class="meta">${t('names')[tierOf(r.best_tile||2)]}</span>
+    </div>`;
+}
+function boardSummaryHtml(s){
+  const champ=s?.top?.[0];
+  if(!champ) return `<div class="sum-empty">${t('noScores').replace('\n','<br>')}</div>`;
+  const me = s.me
+    ? `<div class="sum-card me"><span class="cap">${t('yourBest')}</span>
+         <b>#${s.me.rank}</b><span class="pt">${fmt(s.me.score)}</span>
+         <span class="sp">${t('names')[tierOf(s.me.best_tile||2)]}</span></div>`
+    : `<div class="sum-card me none"><span class="cap">${t('yourBest')}</span>
+         <b>—</b><span class="pt">${t('notPlayed')}</span></div>`;
+  return `<div class="sum-card top"><span class="cap">🥇 ${t('champion')}</span>
+      <b>${esc(champ.name)}</b><span class="pt">${fmt(champ.score)}</span>
+      <span class="sp">${t('names')[tierOf(champ.best_tile||2)]}</span></div>${me}
+    <div class="sum-players">${s.players} ${t('playersTotal')}</div>`;
+}
+
+/* Fin d'une partie en Mode Doré : une écriture, et seulement sur record. */
+async function pushScore(){
+  if(!golden || !grid) return;
+  let top=0; grid.forEach(row=>row.forEach(t=>{ if(t&&t.v>top) top=t.v; }));
+  if(!top || !isRecord(score,top)) return;          // pas de record = pas d'appel Supabase
+  const invite=document.getElementById('modalInvite');
+  if(!canSubmit()){                                 // hors Telegram : aucune identité signée
+    setLocalBest(score,top,null);
+    if(invite) invite.textContent=t('tgOnly');
+    return;
+  }
+  try{
+    const r=await submitScore({score, tile:top, moves});
+    setLocalBest(r.best, r.best_tile, r.rank);
+    // Record battu : on met à jour le cache avec ce que la réponse contient
+    // déjà, sans second appel.
+    SUMMARY=SUMMARY||{players:0, top:null, me:null};
+    SUMMARY.me={name:r.name, score:r.best, best_tile:r.best_tile, rank:r.rank};
+    SUMMARY.players=r.players;
+    if(r.rank===1) SUMMARY.top={name:r.name, score:r.best, best_tile:r.best_tile};
+    saveSummary(); renderBoardBtn();
+    if(invite) invite.textContent=t('rankLine').replace('%N',r.rank).replace('%T',r.players);
+  }catch(e){
+    if(invite){ invite.textContent=t('sendFail'); invite.style.color='#fca5a5'; }
+  }
+}
+
 /* ---------- Screens / language ---------- */
-const SCREENS=['screenMenu','screenGame'];
+const SCREENS=['screenMenu','screenBoard','screenGame'];
 function show(id){
   SCREENS.forEach(s=>document.getElementById(s).classList.toggle('hidden', s!==id));
   document.body.classList.toggle('playing', id==='screenGame');
@@ -388,11 +584,14 @@ function setLang(l){
   lang=l; localStorage.setItem('flc_lang',l);
   document.getElementById('flagFR').classList.toggle('active', l==='fr');
   document.getElementById('flagEN').classList.toggle('active', l==='en');
-  ['tagline','lblPlay','lblGolden','lblWallet','lblUndo','lblReplay'].forEach((id,i)=>{
-    document.getElementById(id).textContent = t(['tagline','play','golden','wallet','undo','replay'][i]);
+  ['tagline','lblPlay','lblGolden','lblBoard','lblWallet','lblUndo','lblReplay',
+   'boardTitle','boardSub','lblTop'].forEach((id,i)=>{
+    document.getElementById(id).textContent =
+      t(['tagline','play','golden','board','wallet','undo','replay','boardTitle','boardSub','top'][i]);
   });
   document.getElementById('backGame').textContent=t('menu');
-  renderWalletStatus(); renderStatusBar(); renderHud(); renderChain();
+  document.getElementById('backBoard').textContent=t('retour');
+  renderWalletStatus(); renderStatusBar(); renderHud(); renderChain(); renderBoardBtn();
 }
 function toast(msg){
   const el=document.getElementById('toast'); el.innerHTML=msg; el.classList.add('show');
@@ -413,7 +612,7 @@ function showLockModal(){
    ============================================================ */
 const N=4;
 const elTiles=document.getElementById('tiles'), elCells=document.getElementById('cells');
-let grid, els=new Map(), uid=0, score=0, golden=false, undos=0, hist=null, over=false, wonFlag=false, ghosts=[];
+let grid, els=new Map(), uid=0, score=0, moves=0, golden=false, undos=0, hist=null, over=false, wonFlag=false, ghosts=[];
 let best=Number(localStorage.getItem('flc_2048Best')||0);
 let seenMax=Number(localStorage.getItem('flc_2048Seen')||0);
 
@@ -433,12 +632,14 @@ function startGame(g){
 function restart(){
   closeModal();
   grid=Array.from({length:N},()=>Array(N).fill(null));
-  score=0; over=false; wonFlag=false; hist=null; ghosts=[];
+  score=0; moves=0; over=false; wonFlag=false; hist=null; ghosts=[];
   undos = golden?3:0;
   elTiles.innerHTML=''; els.clear();
   addRandom(); addRandom(); render(); renderHud(); renderChain();
   document.getElementById('gameMode').textContent = golden ? t('modeGolden') : t('modeClassic');
 }
+/* Quitter en cours de partie compte aussi : le score part s'il bat le record. */
+function quitGame(){ pushScore(); show('screenMenu'); }
 function addRandom(){
   const free=[];
   for(let r=0;r<N;r++) for(let c=0;c<N;c++) if(!grid[r][c]) free.push([r,c]);
@@ -482,7 +683,7 @@ function lines(dir){
 }
 function move(dir){
   if(over) return;
-  const snap={g:grid.map(row=>row.map(t=>t?{...t}:null)), s:score};
+  const snap={g:grid.map(row=>row.map(t=>t?{...t}:null)), s:score, m:moves};
   let moved=false, gained=0;
   lines(dir).forEach(line=>{
     const src=line.map(([r,c])=>grid[r][c]).filter(Boolean), out=[], eaten=[];
@@ -503,6 +704,7 @@ function move(dir){
   grid.forEach(row=>row.forEach(t=>{ if(t) delete t._m; }));
   if(!moved){ ghosts=[]; return; }
   hist=snap;
+  moves++;
   score += golden ? gained*2 : gained;
   addRandom(); render();
   haptic(gained?'medium':'light');
@@ -528,7 +730,7 @@ function checkState(){
   if(top>=2048 && !wonFlag){
     wonFlag=true;
     modal(`<img src="${IMG.coeur}" alt=""><h2 class="win">👑 ${t('win')}</h2><p>${t('winText')}</p>
-      <div class="modal-score">${score}</div>
+      <div class="modal-score">${fmt(score)}</div>
       <button class="mbtn btn-comp-green" onclick="closeModal()">${t('keepGoing')}</button>
       <button class="mbtn btn-purple" onclick="restart()">🔄 ${t('replay')}</button>`);
     return;
@@ -536,14 +738,17 @@ function checkState(){
   if(!canMove()){
     over=true;
     modal(`<img src="${IMG.triste}" alt=""><h2 class="lose">${t('gameOver')}</h2><p>${t('goText')}</p>
-      <div class="modal-score">${score}</div>
+      <div class="modal-score">${fmt(score)}</div>
+      ${golden?`<p class="invite" id="modalInvite"></p>`:''}
       <button class="mbtn btn-comp-green" onclick="restart()">🔄 ${t('replay')}</button>
+      ${golden?`<button class="mbtn btn-wallet" onclick="closeModal();openBoard()">${t('seeBoard')}</button>`:''}
       <button class="mbtn btn-purple" onclick="closeModal();show('screenMenu')">${t('toMenu')}</button>`);
+    pushScore();   // n'ecrit dans Supabase que si c'est un record
   }
 }
 function undo(){
   if(!hist || undos<=0) return;
-  grid=hist.g; score=hist.s; hist=null; undos--; over=false; ghosts=[];
+  grid=hist.g; score=hist.s; moves=hist.m; hist=null; undos--; over=false; ghosts=[];
   elTiles.innerHTML=''; els.clear();
   grid.forEach(row=>row.forEach(t=>{ if(t){ t.born=false; t.pop=false; } }));
   render(); renderHud();
@@ -552,8 +757,8 @@ function renderHud(){
   if(!grid) return;
   let top=0; grid.forEach(row=>row.forEach(t=>{ if(t&&t.v>top) top=t.v; }));
   document.getElementById('hud').innerHTML=`
-    <div class="chip score"><span class="lab">${t('score')}</span><span class="num">${score}</span></div>
-    <div class="chip best"><span class="lab">${t('best')}</span><span class="num">${best}</span></div>
+    <div class="chip score"><span class="lab">${t('score')}</span><span class="num">${fmt(score)}</span></div>
+    <div class="chip best"><span class="lab">${t('best')}</span><span class="num">${fmt(best)}</span></div>
     <div class="chip spec"><span class="lab">${t('spec')}</span><span class="num">${t('names')[tierOf(top||2)]}</span></div>`;
   const u=document.getElementById('btnUndo');
   u.classList.toggle('hidden', !golden);
