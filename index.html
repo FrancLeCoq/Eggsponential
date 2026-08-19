@@ -69,7 +69,8 @@ body.playing #screenGame.card{
 .menu-btn .lock svg{width:22px; height:22px; display:block}
 #btnWallet{padding:12px 44px 12px 18px; font-size:18px}
 .wallet-text{display:flex; flex-direction:column; align-items:center; line-height:1.1}
-.wallet-sub{font-family:'Fredoka One',cursive; font-size:10px; letter-spacing:0.5px; margin-top:3px; opacity:.95}
+.wallet-sub{font-family:'Fredoka One',cursive; font-size:10px; letter-spacing:0.5px; margin-top:3px; opacity:.95;
+  display:flex; flex-direction:column; align-items:center; gap:1px; line-height:1.25}
 .wallet-sub.ok{color:#bbf7d0}
 .wallet-sub.warn{color:#fde68a}
 .btn-comp-green{background:linear-gradient(135deg,#16a34a,#15803d); box-shadow:0 5px 22px rgba(22,163,74,0.45)}
@@ -264,7 +265,7 @@ body.playing #screenGame.card{
     <div class="summary-box" id="boardSummary"></div>
     <div class="scores-box">
       <div class="sh" id="lblTop">🏅 TOP 10</div>
-      <div id="board"></div>
+      <div id="boardList"></div>
       <div class="no-scores" id="boardState"></div>
     </div>
   </div>
@@ -426,12 +427,12 @@ function renderWalletStatus(){
   btn.classList.remove('btn-wallet','btn-comp-green','btn-comp-orange');
   if(isHolder){
     lock.innerHTML=lockSvg(true); btn.classList.add('btn-comp-green'); sub.className='wallet-sub ok';
-    if(unlockReason==='stars'){ sub.textContent='Unlocked via ⭐'; }
-    else{ const sym=unlockReason==='ton'?'💎':'◎'; const bal=francBalance?Number(francBalance).toLocaleString():'?';
-          sub.textContent=`${t('wConnected')} ${sym} · ${bal} $FRANC`; }
+    if(unlockReason==='stars'){ sub.innerHTML=`<span>${t('wConnected')}</span><span>Unlocked via ⭐</span>`; }
+    else{ const sym=unlockReason==='ton'?'💎':'◎'; const bal=francBalance?fmt(francBalance):'?';
+          sub.innerHTML=`<span>${t('wConnected')}</span><span>${sym} ${bal} $FRANC</span>`; }
   } else {
     sub.className='wallet-sub warn';
-    sub.textContent = walletLinked ? t('wNoFranc') : t('wNotConnected');
+    sub.innerHTML = `<span>${walletLinked ? t('wNoFranc') : t('wNotConnected')}</span>`;
     lock.innerHTML=lockSvg(false); btn.classList.add('btn-comp-orange');
   }
   const gb=document.getElementById('btnGolden');
@@ -527,7 +528,7 @@ function renderMyBest(){
 }
 
 function renderScores(){
-  const sum=document.getElementById('boardSummary'), list=document.getElementById('board'),
+  const sum=document.getElementById('boardSummary'), list=document.getElementById('boardList'),
         st=document.getElementById('boardState');
   if(boardState==='loading'){ sum.innerHTML=''; list.innerHTML=''; st.textContent=t('loading'); return; }
   if(boardState==='error'){ sum.innerHTML=''; list.innerHTML=''; st.textContent=t('boardFail'); return; }
@@ -617,7 +618,20 @@ function showLockModal(){
 const N=4;
 const elTiles=document.getElementById('tiles'), elCells=document.getElementById('cells');
 let grid, els=new Map(), uid=0, score=0, moves=0, golden=false, undos=0, hist=null, over=false, wonFlag=false, ghosts=[];
-let best=Number(localStorage.getItem('flc_2048Best')||0);
+/* Un record par mode : le Mode Doré marque x2, comparer les deux n'aurait
+   aucun sens. */
+const bestKey = () => 'flc_2048Best_' + (golden ? 'golden' : 'classic');
+let best = 0;
+function loadBest(){ best = Number(localStorage.getItem(bestKey()) || 0); }
+/* Reprise de l'ancien record unique : il devient celui du mode Classique. */
+(function migrateBest(){
+  const old = localStorage.getItem('flc_2048Best');
+  if(old !== null){
+    if(localStorage.getItem('flc_2048Best_classic') === null)
+      localStorage.setItem('flc_2048Best_classic', old);
+    localStorage.removeItem('flc_2048Best');
+  }
+})();
 let seenMax=Number(localStorage.getItem('flc_2048Seen')||0);
 
 for(let r=0;r<N;r++) for(let c=0;c<N;c++){
@@ -638,6 +652,7 @@ function restart(){
   grid=Array.from({length:N},()=>Array(N).fill(null));
   score=0; moves=0; over=false; wonFlag=false; hist=null; ghosts=[];
   undos = golden?3:0;
+  loadBest();                     // chaque mode a son propre record
   elTiles.innerHTML=''; els.clear();
   addRandom(); addRandom(); render(); renderHud(); renderChain();
   document.getElementById('gameMode').textContent = golden ? t('modeGolden') : t('modeClassic');
@@ -738,7 +753,7 @@ function checkState(){
   const tier=tierOf(top);
   if(tier>seenMax){ seenMax=tier; localStorage.setItem('flc_2048Seen',String(seenMax));
     toast(`${t('newSpecies')} <b>${t('names')[tier]}</b>`); haptic('heavy'); }
-  if(score>best){ const wasBelow=best; best=score; localStorage.setItem('flc_2048Best',String(best));
+  if(score>best){ const wasBelow=best; best=score; localStorage.setItem(bestKey(),String(best));
     if(wasBelow>0 && !over) { const el=document.getElementById('toast'); if(!el.classList.contains('show')) toast(t('newRecord')); } }
   renderHud(); renderChain();
   if(top>=2048 && !wonFlag){
@@ -796,7 +811,7 @@ function renderChain(){
 /* ---------- Controls ---------- */
 const KM={ArrowUp:0,ArrowRight:1,ArrowDown:2,ArrowLeft:3,w:0,d:1,s:2,a:3};
 document.addEventListener('keydown',e=>{ if(KM[e.key]!==undefined){ move(KM[e.key]); e.preventDefault(); } });
-const boardEl=document.getElementById('board');   // le plateau (`board` = le classement)
+const boardEl=document.getElementById('board');   // le plateau (`board` = le classement serveur)
 let ts=null;
 boardEl.addEventListener('touchstart',e=>{ const p=e.touches[0]; ts={x:p.clientX,y:p.clientY}; e.preventDefault(); },{passive:false});
 boardEl.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
