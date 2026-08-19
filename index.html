@@ -279,7 +279,7 @@ body.playing #screenGame.card{
     <div class="board-wrap"><div class="board" id="board"><div id="cells"></div><div id="tiles"></div></div></div>
     <div class="bonus-bar">
       <button class="bonus-btn" id="btnUndo" onclick="undo()">↩ <span id="lblUndo">Annuler</span></button>
-      <button class="bonus-btn" onclick="restart()">🔄 <span id="lblReplay">Rejouer</span></button>
+      <button class="bonus-btn" onclick="replay()">🔄 <span id="lblReplay">Rejouer</span></button>
     </div>
     <div class="chain" id="chain"></div>
   </div>
@@ -644,6 +644,9 @@ function restart(){
 }
 /* Quitter en cours de partie compte aussi : le score part s'il bat le record. */
 function quitGame(){ pushScore(); show('screenMenu'); }
+/* Rejouer termine la partie en cours : sans ca, un joueur qui gagne a 2048 puis
+   relance perd son score, jamais envoye. pushScore ne fait rien hors record. */
+function replay(){ pushScore(); restart(); }
 function addRandom(){
   const free=[];
   for(let r=0;r<N;r++) for(let c=0;c<N;c++) if(!grid[r][c]) free.push([r,c]);
@@ -706,7 +709,14 @@ function move(dir){
     eaten.forEach(e=>ghosts.push({id:e.id, r:line[e.i][0], c:line[e.i][1]}));
   });
   grid.forEach(row=>row.forEach(t=>{ if(t) delete t._m; }));
-  if(!moved){ ghosts=[]; return; }
+  if(!moved){
+    ghosts=[];
+    // Coup sans effet : si plus rien ne bouge nulle part, la partie est finie.
+    // Sans ce filet, une victoire a 2048 tombant pile sur un plateau bloque
+    // laisserait le joueur devant une grille morte, sans modale ni envoi du score.
+    if(!over && !canMove()) gameOver();
+    return;
+  }
   hist=snap;
   moves++;
   score += golden ? gained*2 : gained;
@@ -736,19 +746,20 @@ function checkState(){
     modal(`<img src="${IMG.coeur}" alt=""><h2 class="win">👑 ${t('win')}</h2><p>${t('winText')}</p>
       <div class="modal-score">${fmt(score)}</div>
       <button class="mbtn btn-comp-green" onclick="closeModal()">${t('keepGoing')}</button>
-      <button class="mbtn btn-purple" onclick="restart()">🔄 ${t('replay')}</button>`);
+      <button class="mbtn btn-purple" onclick="replay()">🔄 ${t('replay')}</button>`);
     return;
   }
-  if(!canMove()){
-    over=true;
-    modal(`<img src="${IMG.triste}" alt=""><h2 class="lose">${t('gameOver')}</h2><p>${t('goText')}</p>
-      <div class="modal-score">${fmt(score)}</div>
-      ${golden?`<p class="invite" id="modalInvite"></p>`:''}
-      <button class="mbtn btn-comp-green" onclick="restart()">🔄 ${t('replay')}</button>
-      ${golden?`<button class="mbtn btn-wallet" onclick="closeModal();openBoard()">${t('seeBoard')}</button>`:''}
-      <button class="mbtn btn-purple" onclick="closeModal();show('screenMenu')">${t('toMenu')}</button>`);
-    pushScore();   // n'ecrit dans Supabase que si c'est un record
-  }
+  if(!canMove()) gameOver();
+}
+function gameOver(){
+  over=true;
+  modal(`<img src="${IMG.triste}" alt=""><h2 class="lose">${t('gameOver')}</h2><p>${t('goText')}</p>
+    <div class="modal-score">${fmt(score)}</div>
+    ${golden?`<p class="invite" id="modalInvite"></p>`:''}
+    <button class="mbtn btn-comp-green" onclick="replay()">🔄 ${t('replay')}</button>
+    ${golden?`<button class="mbtn btn-wallet" onclick="closeModal();openBoard()">${t('seeBoard')}</button>`:''}
+    <button class="mbtn btn-purple" onclick="closeModal();show('screenMenu')">${t('toMenu')}</button>`);
+  pushScore();   // n'ecrit dans Supabase que si c'est un record
 }
 function undo(){
   if(!hist || undos<=0) return;
