@@ -1,15 +1,21 @@
 // ══════════════════════════════════════════════════════════════
 //  eggsponential-scores — Edge Function Supabase
-//  Passe-plat verrouille devant les 2 RPC du classement Eggsponential.
-//  Meme construction que `chickenreflex-scores`.
+//  Classement du Mode Dore d'Eggsponential.
+//  Meme construction que `chickenblast-scores`.
 //
-//  POST { initData, action:'submit'|'board', mode?, limit?,
-//         score?, best_tile?, moves? }
+//  POST { initData, action:'top'|'submit', score?, best_tile?, moves? }
+//    • 'top'    → podium + la ligne du joueur (avec son rang)
+//    • 'submit' → enregistre un run puis renvoie le classement a jour
+//
+//  Un joueur = une ligne. On ne garde que son MEILLEUR score : un
+//  nouveau run n'ecrase le precedent que s'il rapporte plus de points,
+//  ou autant avec une tuile plus haute (logique cote SQL, fonction
+//  eggsponential_submit_score).
 //
 //  L'identite n'est JAMAIS lue dans le corps de la requete : elle est
 //  derivee des initData Telegram verifiees par HMAC-SHA256 avec
-//  BOT_TOKEN (methode officielle). Le player_id vaut 'tg:<id>',
-//  format commun a tous les jeux Francis.
+//  BOT_TOKEN (methode officielle). Le player_id est l'id Telegram,
+//  comme dans chickenblast-scores.
 //
 //  La LECTURE reste ouverte (podium visible hors Telegram, sans la
 //  ligne "moi"). Seule l'ECRITURE exige une signature valide.
@@ -21,7 +27,7 @@ const MAX_SCORE   = 10_000_000
 const MAX_TILE    = 131_072      // 2^17
 const MAX_MOVES   = 200_000
 const MAX_AGE_SEC = 24 * 3600    // fenetre anti-rejeu sur auth_date
-const MODES       = ['golden', 'classic']
+const TOP_N       = 10
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
@@ -80,20 +86,23 @@ function authDateFresh(initData: string): boolean {
   return Number.isFinite(age) && age >= -300 && age <= MAX_AGE_SEC
 }
 
-/** retire les caracteres de controle et les chevrons, borne la longueur */
+/** retire les caracteres de controle et borne la longueur des pseudos */
 function clean(s: string): string {
-  return String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 24)
+  return String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 32)
 }
 
 /** Identite derivee des initData VERIFIEES uniquement. */
-function parseUser(initData: string): { id: string; name: string } | null {
+function parseUser(initData: string): { id: string; name: string; username: string | null } | null {
   try {
     const userStr = new URLSearchParams(initData).get('user')
     if (!userStr) return null
     const u = JSON.parse(userStr)
     if (u?.id === undefined || u?.id === null) return null
-    const name = clean(u.username || [u.first_name, u.last_name].filter(Boolean).join(' '))
-    return { id: 'tg:' + String(u.id), name: name || 'Poulet' }
+    return {
+      id:       String(u.id),
+      name:     clean([u.first_name, u.last_name].filter(Boolean).join(' ')) || 'Player',
+      username: u.username ? clean(String(u.username)) : null,
+    }
   } catch { return null }
 }
 
@@ -115,11 +124,11 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}))
-    const action: string = body?.action === 'submit' ? 'submit' : 'board'
+    const action = body?.action === 'submit' ? 'submit' : 'top'
     const initData: string = typeof body?.initData === 'string' ? body.initData : ''
 
     const token = Deno.env.get('BOT_TOKEN') || ''
-    let user: { id: string; name: string } | null = null
+    let user: { id: string; name: string; username: string | null } | null = null
     let authFailed = false
 
     if (initData) {
@@ -145,48 +154,58 @@ Deno.serve(async (req) => {
     )
 
     // ── ECRITURE : signature obligatoire ──────────────────────
+    let submitted: { improved: boolean; previous: number | null } | null = null
+
     if (action === 'submit') {
       if (!user) {
         return new Response(JSON.stringify({
           ok: false,
-          error: authFailed ? 'Invalid session' : 'Telegram required',
+          error: authFailed ? 'Invalid session' : 'Missing initData',
           authFailed,
         }), { status: 401, headers })
       }
-      const mode  = MODES.includes(body?.mode) ? body.mode : 'golden'
       const score = intIn(body?.score, MAX_SCORE)
       const tile  = tileIn(body?.best_tile)
       const moves = intIn(body?.moves, MAX_MOVES)
       if (score === null || tile === null || moves === null) {
-        return new Response(JSON.stringify({ ok: false, error: 'Invalid stats' }), { status: 400, headers })
+        return new Response(JSON.stringify({ ok: false, error: 'Invalid score' }), { status: 400, headers })
       }
-
-      const { data, error } = await supabase.rpc('submit_eggs_score', {
-        p_player_id:   user.id,     // jamais lu dans la requete
-        p_player_name: user.name,   // idem
-        p_score:       score,
-        p_best_tile:   tile,
-        p_moves:       moves,
-        p_mode:        mode,
+      const { data, error } = await supabase.rpc('eggsponential_submit_score', {
+        p_player_id: user.id,      // jamais lu dans la requete
+        p_name:      user.name,    // idem
+        p_username:  user.username,
+        p_score:     score,
+        p_best_tile: tile,
+        p_moves:     moves,
       })
       if (error) {
-        console.error('submit_eggs_score error:', error.message)
+        console.error('submit rpc error:', error.message)
         return new Response(JSON.stringify({ ok: false, error: 'Could not save score' }), { status: 500, headers })
       }
-      return new Response(JSON.stringify({ ok: true, authFailed, result: data }), { headers })
+      submitted = data as typeof submitted
     }
 
     // ── LECTURE : ouverte, "moi" seulement si signature valide ─
-    const mode = MODES.includes(body?.mode) ? body.mode : 'golden'
-    const limit = intIn(body?.limit, 50) ?? 10
-    const { data, error } = await supabase.rpc('eggs_board', {
-      p_mode: mode, p_limit: Math.max(limit, 1), p_player_id: user?.id ?? null,
+    // Elle suit aussi une ecriture : le client repart avec le classement
+    // a jour sans avoir a rappeler la fonction.
+    const { data: board, error: boardErr } = await supabase.rpc('eggsponential_leaderboard', {
+      p_player_id: user?.id ?? null,
+      p_limit:     TOP_N,
     })
-    if (error) {
-      console.error('eggs_board error:', error.message)
-      return new Response(JSON.stringify({ ok: false, error: 'Could not read board' }), { status: 500, headers })
+    if (boardErr) {
+      console.error('leaderboard rpc error:', boardErr.message)
+      return new Response(JSON.stringify({ ok: false, error: 'Could not read leaderboard' }), { status: 500, headers })
     }
-    return new Response(JSON.stringify({ ok: true, authFailed, result: data }), { headers })
+
+    return new Response(JSON.stringify({
+      ok: true,
+      authFailed,
+      top:   (board as any)?.top   ?? [],
+      me:    (board as any)?.me    ?? null,
+      total: (board as any)?.total ?? 0,
+      improved: submitted?.improved ?? null,
+      previous: submitted?.previous ?? null,
+    }), { headers })
 
   } catch (err) {
     console.error('eggsponential-scores fatal:', String(err))

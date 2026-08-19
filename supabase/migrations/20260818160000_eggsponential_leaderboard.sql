@@ -1,207 +1,160 @@
 -- ══════════════════════════════════════════════════════════════
 --  Eggsponential — classement mondial du Mode Doré
 --
---  Meme construction que le classement de Chicken Reflex :
---    * une seule ligne par joueur = son MEILLEUR score ;
---    * ecriture uniquement quand le joueur bat son record
---      (upsert conditionnel) -> une partie ordinaire n'ecrit rien ;
---    * lecture en UN seul appel (TOP N + la ligne du joueur) ;
---    * les deux RPC sont SECURITY DEFINER et reservees au
---      service_role : seule l'Edge Function `eggsponential-scores`
---      peut les appeler, et elle derive l'identite des initData
---      Telegram verifiees par HMAC. Le client ne choisit jamais
---      son player_id.
+--  Construction reprise telle quelle du classement de Chicken Blast :
+--    * un joueur = UNE ligne, on ne garde que son MEILLEUR score ;
+--    * l'ecriture n'ecrase le precedent que s'il fait mieux (score,
+--      puis plus haute tuile en departage) ;
+--    * une lecture rend le podium + la ligne du joueur avec son rang,
+--      meme hors podium, en un seul appel ;
+--    * RLS active sans aucune policy, et les deux RPC ne sont
+--      executables que par le service_role : seule l'Edge Function
+--      `eggsponential-scores` peut les appeler, et elle derive
+--      l'identite des initData Telegram verifiees par HMAC.
 --
---  Le classement ne concerne que le Mode Dore (reserve aux
---  detenteurs de $FRANC). `mode` existe quand meme pour pouvoir
---  ouvrir un second classement plus tard sans migration de donnees.
+--  Le classement ne concerne que le Mode Dore, reserve aux detenteurs
+--  de $FRANC.
 -- ══════════════════════════════════════════════════════════════
 
-create table if not exists public.eggs_scores (
-  id          uuid primary key default gen_random_uuid(),
-  player_id   text not null,
-  player_name text not null default 'Poulet',
-  score       int  not null,
-  best_tile   int  not null default 2,   -- plus haute tuile atteinte (2..131072)
-  moves       int  not null default 0,
-  mode        text not null default 'golden',
-  day         date not null default ((now() at time zone 'Europe/Paris')::date),
-  created_at  timestamptz not null default now(),
-  constraint eggs_scores_player_mode_key unique (player_id, mode)
+create table if not exists public.eggsponential_scores (
+  player_id   text primary key,
+  player_name text        not null default 'Anon',
+  username    text,
+  score       int         not null default 0,
+  best_tile   int         not null default 2,   -- plus haute tuile atteinte
+  moves       int         not null default 0,
+  games       int         not null default 0,
+  best_at     timestamptz not null default now(),
+  created_at  timestamptz not null default now()
 );
 
-comment on table public.eggs_scores is
-  'Eggsponential : une ligne par joueur et par mode = son MEILLEUR score. Ecrite uniquement quand le joueur bat son record (upsert conditionnel dans submit_eggs_score). day/created_at = date du record. Lecture via eggs_board().';
+comment on table public.eggsponential_scores is
+  'Eggsponential : une ligne par joueur = son MEILLEUR score en Mode Dore. Ecrite uniquement quand le joueur bat son record (le client ne rappelle pas Supabase sinon). Ecriture via eggsponential_submit_score(), lecture via eggsponential_leaderboard().';
 
-create index if not exists eggs_scores_board_idx
-  on public.eggs_scores (mode, score desc, best_tile desc);
+create index if not exists eggsponential_scores_board_idx
+  on public.eggsponential_scores (score desc, best_tile desc, best_at asc);
 
-alter table public.eggs_scores enable row level security;
-
+alter table public.eggsponential_scores enable row level security;
 -- Aucune policy : anon/authenticated ne touchent jamais la table en direct.
-revoke all on public.eggs_scores from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- Upsert conditionnel : n'ecrit que si la partie bat le record du joueur.
--- Renvoie improved=false quand rien n'a change.
+-- Enregistre une partie. Le score n'est remplace que s'il fait mieux.
 -- ---------------------------------------------------------------------------
-create or replace function public.submit_eggs_score(
-  p_player_id   text,
-  p_player_name text,
-  p_score       int,
-  p_best_tile   int,
-  p_moves       int,
-  p_mode        text default 'golden'
-) returns json
+create or replace function public.eggsponential_submit_score(
+  p_player_id text,
+  p_name      text,
+  p_username  text,
+  p_score     int,
+  p_best_tile int,
+  p_moves     int default 0
+) returns jsonb
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path to 'public'
+as $function$
 declare
-  v_day      date := (now() at time zone 'Europe/Paris')::date;
-  v_pid      text := nullif(btrim(p_player_id), '');
-  v_name     text := left(coalesce(nullif(btrim(p_player_name), ''), 'Poulet'), 24);
-  v_old_s    int;
-  v_old_t    int;
-  v_last     timestamptz;
-  v_improved boolean;
-  v_best     int;
-  v_best_t   int;
-  v_rank     int;
-  v_total    int;
+  v_prev_score integer;
+  v_prev_tile  integer;
+  v_score      integer := greatest(coalesce(p_score, 0), 0);
+  v_tile       integer := greatest(coalesce(p_best_tile, 2), 2);
+  v_moves      integer := greatest(coalesce(p_moves, 0), 0);
+  v_better     boolean;
 begin
-  -- Garde-fous : le client est public, on ne lui fait pas confiance.
-  if v_pid is null or length(v_pid) > 64 then
-    raise exception 'invalid player_id';
+  if p_player_id is null or p_player_id = '' then
+    raise exception 'player_id required';
   end if;
-  if p_mode is null or p_mode not in ('golden', 'classic') then
-    raise exception 'invalid mode';
-  end if;
-  -- Une tuile est forcement une puissance de 2, entre l'oeuf et 2^17.
-  if p_best_tile is null or p_best_tile < 2 or p_best_tile > 131072
-     or (p_best_tile & (p_best_tile - 1)) <> 0 then
+  -- Une tuile est forcement une puissance de 2 : le client est public.
+  if v_tile > 131072 or (v_tile & (v_tile - 1)) <> 0 then
     raise exception 'invalid best_tile';
-  end if;
-  if p_moves is null or p_moves < 0 or p_moves > 200000 then
-    raise exception 'invalid moves';
   end if;
   -- Le score d'une grille 4x4 est borne par sa plus haute tuile : atteindre T
   -- rapporte T*(log2 T - 1), et le reste du plateau ne peut pas en rajouter
-  -- plus que quelques fois autant (x2 en Mode Dore). x8 laisse une marge
-  -- confortable tout en rejetant les scores inventes.
-  if p_score is null or p_score < 0
-     or p_score > 8 * p_best_tile * (log(2, p_best_tile::numeric))::int then
+  -- beaucoup plus (x2 en Mode Dore). x8 laisse une marge confortable tout en
+  -- rejetant les scores inventes.
+  if v_score > 8 * v_tile * (log(2, v_tile::numeric))::int then
     raise exception 'inconsistent score';
   end if;
 
-  -- Anti-spam : on n'ecrit que sur record, deux records a 3 s d'intervalle
-  -- ne sont pas une partie de 2048.
-  select created_at into v_last
-    from public.eggs_scores where player_id = v_pid and mode = p_mode;
-  if v_last is not null and now() - v_last < interval '3 seconds' then
-    raise exception 'too fast';
-  end if;
+  select score, best_tile into v_prev_score, v_prev_tile
+    from eggsponential_scores
+   where player_id = p_player_id;
 
-  select score, best_tile into v_old_s, v_old_t
-    from public.eggs_scores where player_id = v_pid and mode = p_mode;
+  -- Meilleur = plus de points, ou autant de points avec une tuile plus haute.
+  v_better := v_prev_score is null
+              or v_score > v_prev_score
+              or (v_score = v_prev_score and v_tile > v_prev_tile);
 
-  -- Meilleur = score superieur, ou score egal avec une tuile plus haute
-  -- (c'est exactement la regle de departage du classement).
-  v_improved := v_old_s is null
-             or p_score > v_old_s
-             or (p_score = v_old_s and p_best_tile > v_old_t);
+  insert into eggsponential_scores
+    (player_id, player_name, username, score, best_tile, moves, games, best_at)
+  values
+    (p_player_id, coalesce(nullif(p_name, ''), 'Anon'), p_username, v_score, v_tile, v_moves, 1, now())
+  on conflict (player_id) do update set
+    player_name = coalesce(nullif(excluded.player_name, ''), eggsponential_scores.player_name),
+    username    = coalesce(excluded.username, eggsponential_scores.username),
+    games       = eggsponential_scores.games + 1,
+    score       = case when v_better then excluded.score     else eggsponential_scores.score     end,
+    best_tile   = case when v_better then excluded.best_tile else eggsponential_scores.best_tile end,
+    moves       = case when v_better then excluded.moves     else eggsponential_scores.moves     end,
+    best_at     = case when v_better then now()              else eggsponential_scores.best_at   end;
 
-  if v_improved then
-    insert into public.eggs_scores
-      (player_id, player_name, score, best_tile, moves, mode, day, created_at)
-    values
-      (v_pid, v_name, p_score, p_best_tile, p_moves, p_mode, v_day, now())
-    on conflict (player_id, mode) do update
-      set player_name = excluded.player_name,
-          score       = excluded.score,
-          best_tile   = excluded.best_tile,
-          moves       = excluded.moves,
-          day         = excluded.day,
-          created_at  = excluded.created_at
-      where excluded.score > public.eggs_scores.score
-         or (excluded.score = public.eggs_scores.score
-             and excluded.best_tile > public.eggs_scores.best_tile);
-  else
-    -- Pas de record, mais on garde le pseudo a jour sans toucher au score.
-    update public.eggs_scores
-       set player_name = v_name
-     where player_id = v_pid and mode = p_mode and player_name is distinct from v_name;
-  end if;
-
-  with ranked as (
-    select player_id, score, best_tile,
-           rank() over (order by score desc, best_tile desc)::int as rank
-      from public.eggs_scores where mode = p_mode
-  )
-  select r.score, r.best_tile, r.rank, (select count(*) from ranked)
-    into v_best, v_best_t, v_rank, v_total
-    from ranked r where r.player_id = v_pid;
-
-  return json_build_object(
-    'ok',        true,
-    'improved',  v_improved,
-    'name',      v_name,
-    'score',     p_score,
-    'best',      v_best,
-    'best_tile', v_best_t,
-    'rank',      v_rank,
-    'players',   v_total
+  return jsonb_build_object(
+    'improved',      v_better and v_score > 0,
+    'previous',      v_prev_score,
+    'previous_tile', v_prev_tile
   );
-end;
-$$;
+end
+$function$;
 
 -- ---------------------------------------------------------------------------
--- Classement : TOP N + la ligne du joueur (meme hors du top).
--- Un seul appel pour toute la page classement.
+-- Classement : TOP N + la ligne du joueur (meme hors du top), en un appel.
 -- ---------------------------------------------------------------------------
-create or replace function public.eggs_board(
-  p_mode      text default 'golden',
-  p_limit     int  default 10,
-  p_player_id text default null
-) returns json
+create or replace function public.eggsponential_leaderboard(
+  p_player_id text default null,
+  p_limit     int  default 10
+) returns jsonb
 language sql
 stable
 security definer
-set search_path = public
-as $$
+set search_path to 'public'
+as $function$
   with ranked as (
-    select s.player_id, s.player_name, s.score, s.best_tile,
-           rank() over (order by s.score desc, s.best_tile desc)::int as rank
-      from public.eggs_scores s
-     where s.mode = coalesce(p_mode, 'golden')
-  ), topn as (
-    select * from ranked
-     order by rank, best_tile desc
-     limit least(greatest(coalesce(p_limit, 10), 1), 50)
+    select player_id, player_name, score, best_tile, best_at,
+           row_number() over (
+             order by score desc, best_tile desc, best_at asc, player_id asc
+           ) as rk
+      from eggsponential_scores
+     where score > 0
   )
-  select json_build_object(
-    'mode',    coalesce(p_mode, 'golden'),
-    'players', (select count(*) from ranked),
-    'top',     coalesce((select json_agg(json_build_object(
-                           'rank',      t.rank,
-                           'name',      t.player_name,
-                           'score',     t.score,
-                           'best_tile', t.best_tile,
-                           'is_me',     (p_player_id is not null and t.player_id = p_player_id))
-                           order by t.rank, t.best_tile desc)
-                         from topn t), '[]'::json),
-    'me',      (select json_build_object('rank', r.rank, 'name', r.player_name,
-                                         'score', r.score, 'best_tile', r.best_tile)
-                  from ranked r
-                 where p_player_id is not null and r.player_id = p_player_id)
-  );
-$$;
+  select jsonb_build_object(
+    'top', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'name',  player_name,
+               'score', score,
+               'tile',  best_tile,
+               'rank',  rk,
+               'me',    (p_player_id is not null and player_id = p_player_id)
+             ) order by rk)
+        from ranked
+       where rk <= greatest(coalesce(p_limit, 10), 1)
+    ), '[]'::jsonb),
+    'me', (
+      select jsonb_build_object(
+               'name',  player_name,
+               'score', score,
+               'tile',  best_tile,
+               'rank',  rk
+             )
+        from ranked
+       where p_player_id is not null and player_id = p_player_id
+    ),
+    'total', (select count(*) from ranked)
+  )
+$function$;
 
--- Les deux RPC ne sont appelables que par l'Edge Function `eggsponential-scores`
--- (service_role). Rien d'exploitable avec la seule cle publishable.
-revoke all on function public.submit_eggs_score(text, text, int, int, int, text)
+-- Les deux RPC ne sont appelables que par l'Edge Function `eggsponential-scores`.
+revoke all on function public.eggsponential_submit_score(text, text, text, int, int, int)
   from public, anon, authenticated;
-revoke all on function public.eggs_board(text, int, text)
+revoke all on function public.eggsponential_leaderboard(text, int)
   from public, anon, authenticated;
-grant execute on function public.submit_eggs_score(text, text, int, int, int, text) to service_role;
-grant execute on function public.eggs_board(text, int, text) to service_role;
+grant execute on function public.eggsponential_submit_score(text, text, text, int, int, int) to service_role;
+grant execute on function public.eggsponential_leaderboard(text, int) to service_role;

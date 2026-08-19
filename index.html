@@ -345,7 +345,8 @@ const I18N = {
     bestScore:'Meilleur score', loading:'Chargement…',
     boardFail:'Classement indisponible pour le moment.',
     noScores:'Aucun score pour le moment.\nJoue au Mode Doré pour ouvrir le classement !',
-    rankLine:'Rang mondial : #%N sur %T', sendFail:'Score non envoyé.',
+    rankLine:'Rang mondial : #%N sur %T', sendFail:'Score non envoyé.', sendOk:'Score envoyé !',
+    myBest:'🏅 Ton meilleur : %S · %E', noBest:'Pas encore de partie en Mode Doré',
     tgOnly:'Le classement mondial est réservé à Telegram.',
     names:['Œuf','Œuf doré','Couvée','Éclosion','Poussin','Poussin doré','Poule','Poule dorée','Coq','Coq royal','Francis doré']
   },
@@ -370,7 +371,8 @@ const I18N = {
     bestScore:'Best score', loading:'Loading…',
     boardFail:'Leaderboard unavailable right now.',
     noScores:'No score yet.\nPlay Golden mode to open the leaderboard!',
-    rankLine:'World rank: #%N of %T', sendFail:'Score not sent.',
+    rankLine:'World rank: #%N of %T', sendFail:'Score not sent.', sendOk:'Score sent!',
+    myBest:'🏅 Your best: %S · %E', noBest:'No Golden mode run yet',
     tgOnly:'The world leaderboard is Telegram only.',
     names:['Egg','Golden egg','Clutch','Hatching','Chick','Golden chick','Hen','Golden hen','Rooster','Royal rooster','Golden Francis']
   }
@@ -446,131 +448,133 @@ function goConnectWallet(){ window.location.href=WALLET_PAGE; }
 
 /* ============================================================
    CLASSEMENT MONDIAL DU MODE DORÉ
-   Même construction que le classement de Chicken Reflex : une seule
-   Edge Function, une seule ligne par joueur, et le minimum d'appels —
-   AUCUN au démarrage, une écriture uniquement sur record, une lecture
-   uniquement quand le joueur ouvre le classement.
+   Construction reprise telle quelle de Chicken Blast : une seule Edge
+   Function, un joueur = une ligne, et le minimum d'appels Supabase —
+   AUCUN au démarrage, une lecture à l'ouverture du classement, une
+   écriture seulement quand le record est battu. La réponse de l'écriture
+   contient déjà le classement à jour, donc pas de second appel.
    ============================================================ */
 const SCORES_EP = BACKEND + '/eggsponential-scores';
-/* Le client n'envoie jamais son identité : le serveur la dérive des initData
-   Telegram dont il vérifie la signature. Écrire exige donc d'être dans
-   Telegram ; lire reste ouvert à tout le monde. */
-const canSubmit = () => !!tg?.initData;
+const MEDALS=['🥇','🥈','🥉'];
+let board=null;            // {top:[], me:{}|null, total:N} renvoyé par le serveur
+let boardState='idle';     // 'idle' | 'loading' | 'ok' | 'error'
+
 const fmt = n => Number(n||0).toLocaleString(lang==='fr'?'fr-FR':'en-GB');
 const esc = s => String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const species = tile => t('names')[tierOf(tile||2)];
 
 async function callScores(action, extra){
   const body={action, ...extra};
-  if(tg?.initData) body.initData=tg.initData;
-  const res=await fetch(SCORES_EP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const d=await res.json().catch(()=>null);
-  if(!res.ok || !d?.ok) throw new Error(d?.error || res.status);
-  return d.result;
-}
-const submitScore = (s) => callScores('submit',{mode:'golden', score:s.score, best_tile:s.tile, moves:s.moves});
-/* Le seul appel de lecture du jeu : TOP 10 + la ligne du joueur, d'un coup. */
-const fetchBoard  = () => callScores('board',{mode:'golden', limit:10});
-
-/* ---------- Record local ----------
-   On n'écrit dans Supabase que si la partie bat le record du joueur. Le record
-   connu est gardé en localStorage, donc une partie ordinaire ne déclenche
-   AUCUN appel réseau. Le serveur revérifie de son côté (upsert conditionnel). */
-function localBest(){ try{ return JSON.parse(localStorage.getItem('flce_best_golden'))||null; }catch(e){ return null; } }
-function setLocalBest(score,tile,rank){ localStorage.setItem('flce_best_golden',JSON.stringify({score,tile,rank})); }
-/* Même règle que le classement : score supérieur, ou score égal plus haute tuile. */
-function isRecord(score,tile){
-  const b=localBest();
-  if(!b) return true;
-  if(score>b.score) return true;
-  return score===b.score && tile>(b.tile||0);
+  if(tg?.initData) body.initData=tg.initData;   // l'identité est dérivée côté serveur
+  const res=await fetch(SCORES_EP,{
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  });
+  return await res.json();
 }
 
-/* ---------- Résumé sous le bouton (champion + ma place) ----------
-   Purement local : rien n'est chargé au démarrage. Le cache est rafraîchi
-   quand le joueur ouvre le classement, ou quand il bat son record. */
-let SUMMARY=(()=>{ try{ return JSON.parse(localStorage.getItem('flce_sum'))||null; }catch(e){ return null; } })();
-function saveSummary(){ localStorage.setItem('flce_sum',JSON.stringify(SUMMARY)); }
-function renderBoardBtn(){
-  const el=document.getElementById('boardSum');
-  // Jamais consulté : on n'affiche rien plutôt que d'inventer un classement vide.
-  if(!SUMMARY){ el.textContent=''; return; }
-  if(!SUMMARY.top){ el.textContent=t('noScores').split('\n')[0]; return; }
-  const me=SUMMARY.me ? ` · ${t('yourBest')} #${SUMMARY.me.rank}` : '';
-  el.innerHTML=`🥇 ${esc(SUMMARY.top.name)} · ${fmt(SUMMARY.top.score)}${me}`;
-}
-
+/* Le SEUL écran qui déclenche une lecture du classement, à son ouverture. */
 function openBoard(){ show('screenBoard'); loadBoard(); }
 async function loadBoard(){
-  const list=document.getElementById('board'), st=document.getElementById('boardState'),
-        sum=document.getElementById('boardSummary');
-  list.innerHTML=''; sum.innerHTML=''; st.textContent=t('loading');
+  if(boardState==='loading') return;
+  boardState='loading'; renderScores();
   try{
-    // Un seul appel : le TOP 10 et la ligne du joueur arrivent ensemble.
-    const b=await fetchBoard();
-    const rows=b.top||[];
-    sum.innerHTML=boardSummaryHtml(b);
-    let html=rows.map(r=>scoreRow(r,r.is_me)).join('');
-    // Joueur hors du TOP : petits points, puis sa ligne juste en dessous.
-    if(b.me && !rows.some(r=>r.is_me)) html+=`<div class="score-gap">⋯</div>`+scoreRow(b.me,true);
-    list.innerHTML=html;
-    // Consultation du classement = seul moment où le cache se rafraîchit.
-    SUMMARY={players:b.players, top:rows[0]||null, me:b.me||null};
-    saveSummary(); renderBoardBtn();
-    if(b.me) setLocalBest(b.me.score, b.me.best_tile, b.me.rank);
-    st.textContent = rows.length ? '' : t('noScores').replace('\n',' ');
-  }catch(e){
-    sum.innerHTML=''; st.textContent=t('boardFail');
-  }
-}
-function scoreRow(r,isMe){
-  const medal = r.rank===1?'🥇' : r.rank===2?'🥈' : r.rank===3?'🥉' : '#'+r.rank;
-  return `<div class="score-row r${r.rank} ${isMe?'me':''}">
-      <span class="rank">${medal}</span>
-      <span class="who">${esc(r.name)}</span>
-      <span class="val">${fmt(r.score)}</span>
-      <span class="meta">${t('names')[tierOf(r.best_tile||2)]}</span>
-    </div>`;
-}
-function boardSummaryHtml(s){
-  const champ=s?.top?.[0];
-  if(!champ) return `<div class="sum-empty">${t('noScores').replace('\n','<br>')}</div>`;
-  const me = s.me
-    ? `<div class="sum-card me"><span class="cap">${t('yourBest')}</span>
-         <b>#${s.me.rank}</b><span class="pt">${fmt(s.me.score)}</span>
-         <span class="sp">${t('names')[tierOf(s.me.best_tile||2)]}</span></div>`
-    : `<div class="sum-card me none"><span class="cap">${t('yourBest')}</span>
-         <b>—</b><span class="pt">${t('notPlayed')}</span></div>`;
-  return `<div class="sum-card top"><span class="cap">🥇 ${t('champion')}</span>
-      <b>${esc(champ.name)}</b><span class="pt">${fmt(champ.score)}</span>
-      <span class="sp">${t('names')[tierOf(champ.best_tile||2)]}</span></div>${me}
-    <div class="sum-players">${s.players} ${t('playersTotal')}</div>`;
+    const d=await callScores('top');
+    if(!d?.ok) throw new Error(d?.error||'ko');
+    board=d; boardState='ok';
+    syncMyBestFromServer(d.me);   // le serveur fait foi
+  }catch(e){ boardState='error'; }
+  renderScores();
 }
 
-/* Fin d'une partie en Mode Doré : une écriture, et seulement sur record. */
+/* Fin de partie en Mode Doré : on n'appelle Supabase QUE si le record est
+   battu. Une partie ordinaire ne déclenche donc aucun appel. */
+async function submitRun(score, tile, moves){
+  setMyBest(score, tile);                 // record local, toujours
+  if(!tg?.initData) return false;         // hors Telegram : aucune identité signée
+  try{
+    const d=await callScores('submit',{score, best_tile:tile, moves});
+    if(!d?.ok) throw new Error(d?.error||'ko');
+    board=d; boardState='ok';             // la réponse contient déjà le classement
+    syncMyBestFromServer(d.me);
+    return true;
+  }catch(e){ boardState='error'; return false; }
+}
+
+/* ---- Record perso, gardé en local ----
+   C'est lui qui décide s'il faut appeler Supabase en fin de partie. Le serveur
+   revérifie de son côté (il ne garde que le meilleur), donc un localStorage
+   vide ou un autre appareil ne peut pas écraser un meilleur score par erreur. */
+function getMyBest(){ try{ return JSON.parse(localStorage.getItem('flce_myBest'))||null; }catch(e){ return null; } }
+function better(score,tile,b){ return !b || score>b.score || (score===b.score && tile>(b.tile||0)); }
+function setMyBest(score,tile){
+  if(better(score,tile,getMyBest())) localStorage.setItem('flce_myBest',JSON.stringify({score,tile,date:Date.now()}));
+}
+function isRecord(score,tile){ return better(score,tile,getMyBest()); }
+/* Le serveur fait foi : on resynchronise le record local à chaque lecture. */
+function syncMyBestFromServer(me){
+  if(!me) return;
+  if(better(me.score, me.tile, getMyBest()))
+    localStorage.setItem('flce_myBest',JSON.stringify({score:me.score, tile:me.tile, date:Date.now()}));
+  renderMyBest();
+}
+
+/* Sous le bouton du menu : le meilleur du joueur, lu en local — donc affiché
+   sans le moindre appel réseau au démarrage. */
+function renderMyBest(){
+  const box=document.getElementById('boardSum'); if(!box) return;
+  const b=getMyBest();
+  box.textContent = b ? t('myBest').replace('%S',fmt(b.score)).replace('%E',species(b.tile)) : t('noBest');
+}
+
+function renderScores(){
+  const sum=document.getElementById('boardSummary'), list=document.getElementById('board'),
+        st=document.getElementById('boardState');
+  if(boardState==='loading'){ sum.innerHTML=''; list.innerHTML=''; st.textContent=t('loading'); return; }
+  if(boardState==='error'){ sum.innerHTML=''; list.innerHTML=''; st.textContent=t('boardFail'); return; }
+  const rows=board?.top||[];
+  if(!rows.length){ sum.innerHTML=''; list.innerHTML=''; st.textContent=t('noScores').replace('\n',' '); return; }
+  const champ=rows[0], me=board.me;
+  sum.innerHTML=`<div class="sum-card top"><span class="cap">🥇 ${t('champion')}</span>
+      <b>${esc(champ.name)}</b><span class="pt">${fmt(champ.score)}</span>
+      <span class="sp">${species(champ.tile)}</span></div>
+    ${me ? `<div class="sum-card me"><span class="cap">${t('yourBest')}</span>
+      <b>#${me.rank}</b><span class="pt">${fmt(me.score)}</span>
+      <span class="sp">${species(me.tile)}</span></div>`
+    : `<div class="sum-card me none"><span class="cap">${t('yourBest')}</span>
+      <b>—</b><span class="pt">${t('notPlayed')}</span></div>`}
+    <div class="sum-players">${board.total} ${t('playersTotal')}</div>`;
+  let html=rows.map(scoreRow).join('');
+  // Joueur hors du TOP : petits points, puis sa ligne juste en dessous.
+  if(me && !rows.some(r=>r.me)) html+=`<div class="score-gap">⋯</div>`+scoreRow({...me, me:true});
+  list.innerHTML=html; st.textContent='';
+}
+function scoreRow(r){
+  return `<div class="score-row r${r.rank} ${r.me?'me':''}">
+      <span class="rank">${MEDALS[r.rank-1]||'#'+r.rank}</span>
+      <span class="who">${esc(r.name)}</span>
+      <span class="val">${fmt(r.score)}</span>
+      <span class="meta">${species(r.tile)}</span>
+    </div>`;
+}
+
+/* Fin d'une partie en Mode Doré : au plus une écriture, et seulement sur record. */
 async function pushScore(){
   if(!golden || !grid) return;
   let top=0; grid.forEach(row=>row.forEach(t=>{ if(t&&t.v>top) top=t.v; }));
-  if(!top || !isRecord(score,top)) return;          // pas de record = pas d'appel Supabase
+  if(!top || !isRecord(score,top)) return;      // pas de record = pas d'appel Supabase
   const invite=document.getElementById('modalInvite');
-  if(!canSubmit()){                                 // hors Telegram : aucune identité signée
-    setLocalBest(score,top,null);
+  if(!tg?.initData){                            // hors Telegram : record gardé en local
+    setMyBest(score,top); renderMyBest();
     if(invite) invite.textContent=t('tgOnly');
     return;
   }
-  try{
-    const r=await submitScore({score, tile:top, moves});
-    setLocalBest(r.best, r.best_tile, r.rank);
-    // Record battu : on met à jour le cache avec ce que la réponse contient
-    // déjà, sans second appel.
-    SUMMARY=SUMMARY||{players:0, top:null, me:null};
-    SUMMARY.me={name:r.name, score:r.best, best_tile:r.best_tile, rank:r.rank};
-    SUMMARY.players=r.players;
-    if(r.rank===1) SUMMARY.top={name:r.name, score:r.best, best_tile:r.best_tile};
-    saveSummary(); renderBoardBtn();
-    if(invite) invite.textContent=t('rankLine').replace('%N',r.rank).replace('%T',r.players);
-  }catch(e){
-    if(invite){ invite.textContent=t('sendFail'); invite.style.color='#fca5a5'; }
-  }
+  const ok=await submitRun(score,top,moves);
+  renderMyBest();
+  if(!invite) return;
+  if(!ok){ invite.textContent=t('sendFail'); invite.style.color='#fca5a5'; return; }
+  invite.textContent = board?.me
+    ? t('rankLine').replace('%N',board.me.rank).replace('%T',board.total)
+    : t('sendOk');
 }
 
 /* ---------- Screens / language ---------- */
@@ -591,7 +595,7 @@ function setLang(l){
   });
   document.getElementById('backGame').textContent=t('menu');
   document.getElementById('backBoard').textContent=t('retour');
-  renderWalletStatus(); renderStatusBar(); renderHud(); renderChain(); renderBoardBtn();
+  renderWalletStatus(); renderStatusBar(); renderHud(); renderChain(); renderMyBest();
 }
 function toast(msg){
   const el=document.getElementById('toast'); el.innerHTML=msg; el.classList.add('show');
@@ -781,11 +785,11 @@ function renderChain(){
 /* ---------- Controls ---------- */
 const KM={ArrowUp:0,ArrowRight:1,ArrowDown:2,ArrowLeft:3,w:0,d:1,s:2,a:3};
 document.addEventListener('keydown',e=>{ if(KM[e.key]!==undefined){ move(KM[e.key]); e.preventDefault(); } });
-const board=document.getElementById('board');
+const boardEl=document.getElementById('board');   // le plateau (`board` = le classement)
 let ts=null;
-board.addEventListener('touchstart',e=>{ const p=e.touches[0]; ts={x:p.clientX,y:p.clientY}; e.preventDefault(); },{passive:false});
-board.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
-board.addEventListener('touchend',e=>{
+boardEl.addEventListener('touchstart',e=>{ const p=e.touches[0]; ts={x:p.clientX,y:p.clientY}; e.preventDefault(); },{passive:false});
+boardEl.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+boardEl.addEventListener('touchend',e=>{
   if(!ts) return;
   const p=e.changedTouches[0], dx=p.clientX-ts.x, dy=p.clientY-ts.y;
   if(Math.max(Math.abs(dx),Math.abs(dy))>=22) move(Math.abs(dx)>Math.abs(dy) ? (dx>0?1:3) : (dy>0?2:0));
